@@ -1,0 +1,10 @@
+node_modules
+.next
+.env
+.env.local
+/uploads/gd-documents/*
+!/uploads/gd-documents/.gitkeep
+!/uploads/gd-documents/demo-gd-placeholder.txt
+*.log
+.DS_Store
+prisma/dev.db

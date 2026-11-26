@@ -1,0 +1,2 @@
+DEMO DATA - NOT A REAL GD DOCUMENT
+This placeholder file exists only so the seeded demo case has a viewable "document".

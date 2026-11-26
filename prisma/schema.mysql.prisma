@@ -1,0 +1,435 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum Role {
+  FAMILY_USER
+  REGISTERED_PERSON
+  AUTHORITY
+  ADMIN
+}
+
+enum CaseStatus {
+  SUBMITTED
+  GD_PENDING
+  UNDER_REVIEW
+  GD_VERIFIED
+  ADDITIONAL_INFORMATION_REQUIRED
+  LOCATION_ASSISTANCE_REQUESTED
+  LOCATION_INFORMATION_RECEIVED
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+enum GDStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum LocationRequestStatus {
+  PENDING
+  SUBMITTED
+  PROCESSING
+  RECEIVED
+  REJECTED
+}
+
+enum LocationSource {
+  DEMO_MOCK_PROVIDER
+  AUTHORIZED_PROVIDER
+  BROWSER_CONSENTED_GPS
+}
+
+enum SOSStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+  CANCELLED
+}
+
+enum NotificationType {
+  CASE_UPDATE
+  GD_VERIFIED
+  GD_REJECTED
+  LOCATION_REQUEST_UPDATE
+  SOS_ALERT
+  TRUSTED_CONTACT_INVITE
+  BILLING
+  SYSTEM
+}
+
+enum SubscriptionStatus {
+  NONE
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+// ---------------------------------------------------------------------------
+// CORE MODELS
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  fullName      String
+  phone         String   @unique
+  email         String?  @unique
+  passwordHash  String
+  role          Role     @default(FAMILY_USER)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  reportedCases        MissingPersonCase[] @relation("ReportedBy")
+  registeredProfile    RegisteredPersonProfile?
+  trustedContactOf     TrustedContact[]        @relation("ContactOwner")
+  locationShares        LocationShare[]
+  sosAlerts             SOSAlert[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  authorityActions      CaseTimelineEvent[]     @relation("ActionedBy")
+  gdVerifications        GDDocument[]           @relation("VerifiedBy")
+  locationRequestsMade   LocationRequest[]      @relation("RequestedBy")
+  subscription           Subscription?
+  payments                Payment[]
+
+  @@index([role])
+  @@index([phone])
+}
+
+model RegisteredPersonProfile {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  locationConsent   Boolean  @default(false)
+  consentUpdatedAt  DateTime?
+  emergencyNotes    String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model MissingPersonCase {
+  id                    String     @id @default(cuid())
+  caseNumber            String     @unique
+  fullName              String
+  nickname              String?
+  age                   Int
+  gender                String
+  photoUrl              String?
+  phone                 String?
+  alternatePhone        String?
+  lastSeenLocation      String
+  lastSeenLat           Float?
+  lastSeenLng           Float?
+  lastSeenDate          DateTime
+  lastSeenTime          String?
+  clothingDescription   String?    @db.Text
+  physicalDescription   String?    @db.Text
+  medicalNotes          String?    @db.Text
+  additionalInfo        String?    @db.Text
+
+  reporterId            String
+  reporter              User       @relation("ReportedBy", fields: [reporterId], references: [id])
+  reporterRelationship  String
+  reporterPhone         String
+  reporterEmail         String?
+
+  status                CaseStatus @default(SUBMITTED)
+  isDemo                Boolean    @default(false)
+
+  createdAt             DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  gdDocuments            GDDocument[]
+  timeline                CaseTimelineEvent[]
+  locationRequests        LocationRequest[]
+  authorizedLocations      AuthorizedLocation[]
+  notes                    CaseNote[]
+
+  @@index([status])
+  @@index([caseNumber])
+  @@index([phone])
+}
+
+model GDDocument {
+  id             String    @id @default(cuid())
+  caseId         String
+  case           MissingPersonCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  gdNumber       String
+  policeStation  String
+  gdFilingDate   DateTime
+  gdFilingTime   String?
+  reporterName   String
+  officerName    String?
+
+  fileName       String
+  storedFileName String
+  mimeType       String
+  fileSizeBytes  Int
+
+  status         GDStatus @default(PENDING)
+  verifiedById   String?
+  verifiedBy     User?    @relation("VerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt     DateTime?
+  rejectionReason String?  @db.Text
+
+  createdAt      DateTime @default(now())
+
+  @@index([caseId])
+  @@index([status])
+}
+
+model CaseTimelineEvent {
+  id          String   @id @default(cuid())
+  caseId      String
+  case        MissingPersonCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  label       String
+  description String?  @db.Text
+  actorId     String?
+  actor       User?    @relation("ActionedBy", fields: [actorId], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([caseId])
+}
+
+model CaseNote {
+  id        String   @id @default(cuid())
+  caseId    String
+  case      MissingPersonCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  authorId  String
+  body      String   @db.Text
+  isAuthorityOnly Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// ---------------------------------------------------------------------------
+// AUTHORIZED LOCATION ASSISTANCE (mock provider abstraction only)
+// ---------------------------------------------------------------------------
+
+model LocationRequest {
+  id                String   @id @default(cuid())
+  caseId            String
+  case              MissingPersonCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  gdNumber          String
+  policeStation     String
+  missingPersonPhone String?
+  lastKnownLocation String?
+  reason            String   @db.Text
+  requestingAuthorityId String
+  requestingAuthority   User @relation("RequestedBy", fields: [requestingAuthorityId], references: [id])
+
+  status            LocationRequestStatus @default(PENDING)
+  providerName      String   @default("MockAuthorizedLocationProvider")
+  providerReference String?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  authorizedLocation AuthorizedLocation?
+
+  @@index([caseId])
+  @@index([status])
+}
+
+model AuthorizedLocation {
+  id                String   @id @default(cuid())
+  caseId            String
+  case              MissingPersonCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  locationRequestId String   @unique
+  locationRequest   LocationRequest @relation(fields: [locationRequestId], references: [id], onDelete: Cascade)
+
+  latitude          Float
+  longitude         Float
+  address           String?
+  accuracyMeters     Int?
+  isCurrent         Boolean  @default(true)
+  source            LocationSource @default(DEMO_MOCK_PROVIDER)
+  isDemoData        Boolean  @default(true)
+  verificationStatus String  @default("DEMO - NOT A REAL LOCATION")
+
+  capturedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// ---------------------------------------------------------------------------
+// REGISTERED-USER CONSENTED LIVE LOCATION SHARING
+// ---------------------------------------------------------------------------
+
+model LocationShare {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isActive    Boolean  @default(true)
+  startedAt   DateTime @default(now())
+  expiresAt   DateTime?
+  stoppedAt   DateTime?
+  reason      String   @default("MANUAL")
+
+  points      LocationPoint[]
+
+  @@index([userId])
+  @@index([isActive])
+}
+
+model LocationPoint {
+  id              String   @id @default(cuid())
+  shareId         String
+  share           LocationShare @relation(fields: [shareId], references: [id], onDelete: Cascade)
+  latitude        Float
+  longitude       Float
+  accuracyMeters  Float?
+  capturedAt      DateTime @default(now())
+
+  @@index([shareId])
+}
+
+model TrustedContact {
+  id           String   @id @default(cuid())
+  ownerId      String
+  owner        User     @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  name         String
+  phone        String
+  relationship String
+  canViewLocation Boolean @default(true)
+  createdAt    DateTime @default(now())
+
+  @@index([ownerId])
+}
+
+model SOSAlert {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status      SOSStatus @default(ACTIVE)
+  latitude    Float?
+  longitude   Float?
+  message     String?   @db.Text
+  createdAt   DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String   @db.Text
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  caseId    String?
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([caseId])
+  @@index([action])
+}
+
+// ---------------------------------------------------------------------------
+// SUBSCRIPTION & BILLING
+// ---------------------------------------------------------------------------
+// Why: authorized location-assistance requests are a sensitive, potentially
+// abusable capability (each one creates real work for an "authority" in
+// production). Gating it — and bulk case creation — behind a paid,
+// identity-linked subscription discourages spam/misuse versus leaving it
+// free for anyone to trigger. Payments go through the PaymentProvider
+// abstraction (src/lib/paymentProvider.ts), mocked in this build.
+
+model SubscriptionPlan {
+  id              String   @id @default(cuid())
+  code            String   @unique // e.g. "FREE", "FAMILY_MONTHLY", "FAMILY_YEARLY"
+  name            String
+  description     String   @db.Text
+  priceBDT        Int      // price in BDT (lowest whole unit, Taka — no paisa)
+  billingCycle    BillingCycle?
+  maxActiveCases  Int      // how many open cases a FAMILY_USER may have at once
+  locationRequestsIncluded Int // authorized location-assistance requests allowed per billing cycle; -1 = unlimited
+  isDefault       Boolean  @default(false) // the free plan every new user starts on
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  subscriptions   Subscription[]
+}
+
+model Subscription {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId           String
+  plan             SubscriptionPlan @relation(fields: [planId], references: [id])
+  status           SubscriptionStatus @default(NONE)
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  locationRequestsUsedThisPeriod Int @default(0)
+  cancelAtPeriodEnd Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  payments         Payment[]
+
+  @@index([status])
+}
+
+model Payment {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptionId   String?
+  subscription     Subscription? @relation(fields: [subscriptionId], references: [id])
+  planId           String?
+  amountBDT        Int
+  status           PaymentStatus @default(PENDING)
+  providerName     String   @default("MockPaymentProvider")
+  providerReference String?
+  isDemoPayment    Boolean  @default(true)
+  failureReason    String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  @@index([userId])
+  @@index([status])
+}
